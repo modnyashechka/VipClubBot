@@ -170,10 +170,11 @@ async def process_win_stats(bot: Bot, user_id, user, win_amt):
         await add_xp(bot, user_id, streak_xp)
         try: await bot.send_message(user_id, f"🔥 <b>STREAK BONUS!</b> You hit {user['win_streak']} wins in a row! (+{streak_xp} XP)", parse_mode="HTML")
         except: pass
-
 async def handle_game_end_xp(bot: Bot, user_id, user, bet):
     if not user["first_game"]:
         user["first_game"] = True
+        from database import db_save_user
+        db_save_user(user) 
         guide = (
             "🎓 <b>THE XP & RANK RUNDOWN</b>\n━━━━━━━━━━━━━━\n"
             "<i>Good onya for having your first spin! Here's how you climb the ranks:</i>\n\n"
