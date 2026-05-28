@@ -8,8 +8,7 @@ from datetime import datetime
 from aiogram import Bot, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import VIP_LINK, bot_state
-from database import db_save_user, db_get_user
-
+from database import db_save_user, db_get_user, db_save_promo
 
 # Globalna lista najlepszych dzisiejszych wygranych (utrzymywana w pamięci podręcznej)
 global_top_wins_today = []
@@ -78,7 +77,6 @@ async def ai_spam_filter(text: str) -> bool:
     return True
 
 async def update_streak(bot: Bot, user_id, message: types.Message):
-    from database import db_save_promo
     user = db_get_user(user_id, message.from_user.username, message.from_user.full_name)
     now = datetime.now()
     today_str = now.strftime('%Y-%m-%d')
@@ -144,12 +142,22 @@ async def handle_no_money(bot: Bot, event, user):
         if isinstance(event, types.Message): await event.answer(text, parse_mode="HTML")
         else: await event.answer("Not enough chips, mate!", show_alert=True)
 
-# NOWY PARAMETR I ZMIENIONA NAZWA: "Share wins for Bonus" z bonusem +100 chips przy przejściu z linku referencyjnego
-def get_share_markup(user_id, win_amt):
-    bot_link = f"https://t.me/{bot_state.get('bot_username', 'Vipclubcasinobot')}?start=share_{user_id}"
-    share_text = f"🔥 Strewth! Just bagged {win_amt} chips playing on the VIP Club bot! Come join the fun, smash my link and snap a 1000 chips bonus instantly, plus I'll score a 100 bonus chips: {bot_link}"
-    share_url = f"https://t.me/share/url?url=&text={urllib.parse.quote(share_text)}"
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📤 Share wins for Bonus", url=share_url)]])
+
+def get_share_markup(user_id, win_amount):
+    # Poprawny link do Twojego bota
+    bot_link = f"https://t.me/VipClubXQ7_bot?start=ref_{user_id}"
+    
+    text = f"🔥 Crikey mate! I just smashed a massive {win_amount} chips win at VipClubX! 🎰\n\nTap the link, join our bonza channel, and grab your free starting chips to spin the Pokies! 👇\n{bot_link}"
+    encoded_text = urllib.parse.quote(text)
+    
+    share_msg_url = f"https://t.me/share/url?url={bot_link}&text={encoded_text}"
+    
+    # Zostawiamy tylko przycisk wysyłki i przycisk do AI. Usuwamy dziurę do darmowych chipsów.
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📩 Share Win (Get Chips when they join!)", url=share_msg_url)],
+        [InlineKeyboardButton(text="📸 I posted a Story! (Earn 500 Chips)", callback_data="ask_for_story_screen")]
+    ])
+    return keyboard
 
 async def process_win_stats(bot: Bot, user_id, user, win_amt):
     user["total_won_chips"] += win_amt
@@ -170,10 +178,10 @@ async def process_win_stats(bot: Bot, user_id, user, win_amt):
         await add_xp(bot, user_id, streak_xp)
         try: await bot.send_message(user_id, f"🔥 <b>STREAK BONUS!</b> You hit {user['win_streak']} wins in a row! (+{streak_xp} XP)", parse_mode="HTML")
         except: pass
+
 async def handle_game_end_xp(bot: Bot, user_id, user, bet):
     if not user["first_game"]:
         user["first_game"] = True
-        from database import db_save_user
         db_save_user(user) 
         guide = (
             "🎓 <b>THE XP & RANK RUNDOWN</b>\n━━━━━━━━━━━━━━\n"
@@ -190,21 +198,21 @@ async def handle_game_end_xp(bot: Bot, user_id, user, bet):
         try: await bot.send_message(user_id, guide, parse_mode="HTML")
         except: pass
     
-    if user.get("referral_pending") and user.get("referrer_id"):
-        ref_id = user["referrer_id"]
-        r_user = db_get_user(ref_id)
-        user["balance"] += 1000
-        user["referral_pending"] = False
-        user["referrer_id"] = None
-        try: await bot.send_message(user_id, "🎉 <b>PROMISE KEPT!</b> You played your first game from an invite. <b>+1000 chips</b> added to your stash!", parse_mode="HTML")
-        except: pass
-        
-        r_user["referrals"] += 1
-        r_user["balance"] += 3000
-        db_save_user(r_user)
-        await add_xp(bot, ref_id, 1000)
-        try: await bot.send_message(ref_id, f"🫂 <b>MATE JOINED & PLAYED!</b>\nYour mate just finished a game! You scored <b>3000 chips</b> and <b>1000 XP</b>! (Total invites: {r_user['referrals']})", parse_mode="HTML")
-        except: pass
+        if user.get("referral_pending") and user.get("referrer_id"):
+            ref_id = user["referrer_id"]
+            r_user = db_get_user(ref_id)
+            user["balance"] += 1000
+            user["referral_pending"] = False
+            user["referrer_id"] = None
+            try: await bot.send_message(user_id, "🎉 <b>PROMISE KEPT!</b> You played your first game from an invite. <b>+1000 chips</b> added to your stash!", parse_mode="HTML")
+            except: pass
+            
+            r_user["referrals"] += 1
+            r_user["balance"] += 3000
+            db_save_user(r_user)
+            await add_xp(bot, ref_id, 1000)
+            try: await bot.send_message(ref_id, f"🫂 <b>MATE JOINED & PLAYED!</b>\nYour mate just finished a game! You scored <b>3000 chips</b> and <b>1000 XP</b>! (Total invites: {r_user['referrals']})", parse_mode="HTML")
+            except: pass
 
     game_xp = 10 + (bet // 50)
     user["xp"] += game_xp
@@ -258,11 +266,29 @@ def render_hilo_table(num, next_num=None):
     n1 = str(num)
     n2 = "??" if next_num is None else str(next_num)
     return (
-        f"<pre>\n CURRENT    NEXT\n ┌───────┐  ┌───────┐\n │{n1.ljust(3)}    │  │{n2.ljust(3)}    │\n │   ♣   │  │   ?   │\n"
+        f"<pre>\n CURRENT   NEXT\n ┌───────┐  ┌───────┐\n │{n1.ljust(3)}    │  │{n2.ljust(3)}    │\n │   ♣   │  │   ?   │\n"
         f" │    {n1.rjust(3)}│  │    {n2.rjust(3)}│\n └───────┘  └───────┘\n</pre>"
     )
+
 async def process_loss_stats(user, bet_amt):
     user["win_streak"] = 0
     user["weekly_losses"] += bet_amt
     user["weekly_days"].add(datetime.now().weekday())
     user["inactivity_reminded"] = False
+
+
+def get_viral_markup(user_id):
+    # Zaktualizowana nazwa bota
+    bot_link = f"https://t.me/VipClubXQ7_bot?start=ref_{user_id}" 
+    
+    text = f"🔥 Crikey mate! I'm racking up massive wins at VipClubX! 🎰\n\nTap the link, join our bonza channel, and grab your free starting chips to spin the Pokies! 👇\n{bot_link}"
+    encoded_text = urllib.parse.quote(text)
+    
+    share_msg_url = f"https://t.me/share/url?url={bot_link}&text={encoded_text}"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📩 Share to DM (Earn 100 Chips)", url=share_msg_url)],
+        [InlineKeyboardButton(text="📸 I posted a Story! (Earn 500 Chips)", callback_data="ask_for_story_screen")]
+    ])
+    
+    return keyboard

@@ -16,42 +16,29 @@ def init_db():
     
     # Tabel of users
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        full_name TEXT,
-        balance INTEGER DEFAULT 500,
-        xp INTEGER DEFAULT 0,
-        first_game INTEGER DEFAULT 0,
-        daily_games INTEGER DEFAULT 0,
-        win_streak INTEGER DEFAULT 0,
-        weekly_losses INTEGER DEFAULT 0,
-        weekly_days TEXT DEFAULT '[]',
-        inactivity_reminded INTEGER DEFAULT 0,
-        last_daily REAL DEFAULT 0,
-        last_active REAL DEFAULT 0,
-        claimed_sub_bonus INTEGER DEFAULT 0,
-        pending_game TEXT,
-        whiskey_buff INTEGER DEFAULT 0,
-        state TEXT DEFAULT 'normal',
-        reply_to INTEGER,
-        temp_promo_amt INTEGER DEFAULT 0,
-        total_games INTEGER DEFAULT 0,
-        total_won_chips INTEGER DEFAULT 0,
-        login_streak INTEGER DEFAULT 1,
-        last_login_date TEXT,
-        referrals INTEGER DEFAULT 0,
-        referrer_id INTEGER,
-        referral_pending INTEGER DEFAULT 0,
-        last_story_claim REAL DEFAULT 0,
-        story_link_gen_time REAL,
-        is_banned INTEGER DEFAULT 0,
-        claimed_streaks TEXT DEFAULT '[]',
-        inventory TEXT DEFAULT '[]',
-        luck_bombs_today INTEGER DEFAULT 0,
-        mystery_boxes_today INTEGER DEFAULT 0
-    )
-    """)
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    balance INTEGER,
+    xp INTEGER DEFAULT 0,
+    win_streak INTEGER DEFAULT 0,
+    total_games INTEGER DEFAULT 0,
+    daily_games INTEGER DEFAULT 0,
+    luck_bombs_today INTEGER DEFAULT 0,
+    mystery_boxes_today INTEGER DEFAULT 0,
+    whiskey_buff INTEGER DEFAULT 0,
+    last_active REAL,
+    inactivity_reminded BOOLEAN DEFAULT 0,
+    inventory TEXT,
+    weekly_days TEXT,
+    weekly_losses INTEGER DEFAULT 0,
+    is_banned BOOLEAN DEFAULT 0,
+    
+    -- Nowe kolumny dla systemu polecen i weryfikacji Story (Wazne przecinki!)
+    referred_by INTEGER DEFAULT 0,
+    ref_reward_paid BOOLEAN DEFAULT 0,
+    story_claimed BOOLEAN DEFAULT 0
+)
+""")
     
     # Tabela kodów promocyjnych
     cursor.execute("""

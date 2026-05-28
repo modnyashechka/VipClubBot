@@ -1,21 +1,35 @@
 import asyncio
 import time
 import random
+import string  # ИСПРАВЛЕНО: Без tego генерация промокодов выдавала бы ошибку!
 from datetime import datetime
 from aiogram import Bot, Dispatcher, BaseMiddleware, types
+from aiogram.filters import Command, CommandObject
+from aiogram import F
+import io
+from PIL import Image
 
-#import nest_asyncio
-#nest_asyncio.apply()
+# Новый официальный SDK от Google (Актуальный для 2026 года)
+from google import genai  
 
 from config import BOT_TOKEN, ADMIN_IDS, bot_state
 from database import init_db, db_get_user, db_save_user, db_get_all_users, db_save_promo
 from handlers import main_router
 import keyboards as kb
 
+# Инициализация нового клиента Google GenAI
+GEMINI_API_KEY = "AIzaSyDHTrmIgmDenBABSiqAnyTICs4rsDzFsuM"
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Kompilacja warstwy Middleware do weryfikacji blokad kont oraz trybu konserwacji
+# ---------------------------------------------------------
+# ВАЖНО: ВСТАВЬ СЮДА ID ИЛИ @USERNAME ТВОЕГО КАНАЛА
+# ---------------------------------------------------------
+CHANNEL_ID = -1003927802145
+
+# Компиляция слоя Middleware для проверки банов и техработ
 class SecurityMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user_id = getattr(event.from_user, 'id', None) if getattr(event, 'from_user', None) else None
@@ -32,7 +46,88 @@ class SecurityMiddleware(BaseMiddleware):
                 return 
         return await handler(event, data)
 
-# Automatyczne wątki przetwarzania danych w tle (Cron Jobs)
+#
+
+# ---------------------------------------------------------
+# КОМАНДА /START (РЕФЕРАЛЫ + ПРОВЕРКА КАНАЛА)
+# ---------------------------------------------------------
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message, command: CommandObject, bot: Bot):
+    user_id = message.from_user.id
+    user = db_get_user(user_id)
+    
+    # 1. ЗАПОМИНАЕМ, КТО ПРИГЛАСИЛ (Используем правильные ключи из твоей БД!)
+    args = command.args
+    if args and args.startswith("ref_") and not user.get("referrer_id"):
+        try:
+            ref_id = int(args.split("_")[1])
+            if ref_id != user_id:
+                user["referrer_id"] = ref_id
+                user["referral_pending"] = True  # Флаг, что фишки еще не выданы
+                db_save_user(user)
+        except ValueError:
+            pass
+
+    # 2. ПРОВЕРЯЕМ ПОДПИСКУ НА КАНАЛ
+    is_in_channel = False
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            is_in_channel = True
+    except Exception as e:
+        print(f"⚠️ Ошибка проверки канала: {e}")
+
+    # 3. ЛОГИКА ВЫДАЧИ БОНУСОВ
+    if user.get("referral_pending") and user.get("referrer_id"):
+        if is_in_channel:
+            # ДРУГ ПОДПИСАЛСЯ - ПЛАТИМ ОБОИМ!
+            ref_id = user["referrer_id"]
+            referrer = db_get_user(ref_id)
+            
+            # Награда пригласившему
+            referrer["balance"] += 100
+            referrer["referrals"] = referrer.get("referrals", 0) + 1
+            db_save_user(referrer)
+            
+            # Награда новому игроку (снимаем флаг pending, чтобы не платить дважды)
+            user["balance"] += 500
+            user["referral_pending"] = False
+            db_save_user(user)
+            
+            try:
+                await bot.send_message(
+                    ref_id, 
+                    "🎉 <b>Bloody legend!</b> Your mate joined the channel! <b>+100 Bonus Chips!</b> 💰",
+                    parse_mode="HTML"
+                )
+            except: pass
+            
+            await message.answer(
+                "🎉 <b>Bonza!</b> You joined via a friend's link and subscribed! You get <b>500 Bonus Chips</b>!\n\nWelcome to VipClubX Bonus Game! 🎰", 
+                reply_markup=kb.get_main_menu(user_id), 
+                parse_mode="HTML"
+            )
+            return
+        else:
+            # ДРУГ ЕЩЕ НЕ ПОДПИСАН - ТОРМОЗИМ ЕГО
+            await message.answer(
+                "🛑 <b>Hold your horses, mate!</b>\n\n"
+                "You were invited by a friend, but to get your free chips, you MUST join our channel first!\n\n"
+                "1️⃣ Join here: <b>@ТВОЙ_КАНАЛ_СЮДА</b>\n"
+                "2️⃣ Come back and press /start again!",
+                parse_mode="HTML"
+            )
+            return
+
+    # 4. ОБЫЧНЫЙ СТАРТ (Без рефералки или если всё уже получено)
+    await message.answer(
+        "G'day mate! Welcome to VipClubX! Ready to smash the Pokies? 🎰\n\n<i>Use the menu to navigate.</i>", 
+        reply_markup=kb.get_main_menu(user_id), 
+        parse_mode="HTML"
+    )
+    
+    
+# Автоматические фоновые задачи (Cron Jobs)
 async def background_jobs():
     last_daily_date = datetime.now().date()
     last_hh_notif = time.time()
@@ -130,6 +225,7 @@ async def background_jobs():
                 try: await bot.send_message(u["user_id"], "👋 <b>LONG TIME NO SEE, MATE!</b>\n━━━━━━━━━━━━━━\nWe missed ya at the pub! The boys chucked <b>2000 chips</b> into your stash to get you back in the game. Come have a spin!", reply_markup=kb.get_main_menu(u["user_id"]), parse_mode="HTML")
                 except: pass
 
+
 async def main():
     init_db()  # Uruchomienie SQLite
     print("Database SQL initialized successfully.")
@@ -140,6 +236,75 @@ async def main():
     
     dp.message.middleware(SecurityMiddleware())
     dp.callback_query.middleware(SecurityMiddleware())
+    
+# === ФИНАЛЬНЫЙ ИСПРАВЛЕННЫЙ ПЕРЕХВАТЧИК СКРИНШОТОВ ДЛЯ ИИ ===
+    @dp.message(F.photo | F.document)
+    async def handle_story_screenshot(message: types.Message, bot: Bot):
+        user_id = message.from_user.id
+        user = db_get_user(user_id)
+        
+        if user.get("story_claimed", False):
+            await message.answer("❌ <b>Yeah, nah.</b> You've already claimed your Story bonus, mate!", parse_mode="HTML")
+            return
+            
+        processing_msg = await message.answer("🤖 Let me run this past the AI to verify your Story... Hang tight, mate!")
+        
+        try:
+            # Вытягиваем фото или документ
+            if message.photo:
+                photo_obj = message.photo[-1]
+            elif message.document and message.document.mime_type.startswith('image/'):
+                photo_obj = message.document
+            else:
+                await processing_msg.edit_text("❌ Mate, that doesn't look like an image file!")
+                return
+
+            # Скачиваем в оперативную память
+            file_io = io.BytesIO()
+            await bot.download(photo_obj, destination=file_io)
+            file_io.seek(0)
+            
+            img = Image.open(file_io)
+
+            # Инструкция для ИИ
+            prompt = (
+                "You are an automated moderator for a Telegram bot. "
+                "Analyze this screenshot. Reply strictly with one word: YES or NO. "
+                "Rules to answer YES: "
+                "1. The image MUST contain the exact text '@VipClubXQ7_bot' or 't.me/VipClubXQ7_bot' clearly visible. "
+                "If the rule fails, answer NO."
+            )
+
+            # ИСПРАВЛЕНИЕ: Указываем точную версию модели 'gemini-1.5-flash-latest'
+            response = ai_client.models.generate_content(
+                model='gemini-2.5-flash',  # Полное имя решает проблему с 404!
+                contents=[img, prompt]
+            )
+            
+            result_text = response.text.strip().upper()
+            ai_verified_successfully = "YES" in result_text
+
+        except Exception as e:
+            print(f"⚠️ Ошибка ИИ: {e}")
+            await processing_msg.edit_text("❌ Bloody hell, the AI servers are down or rate-limited. Try again in a minute!")
+            return
+        
+        # Выдаем награду
+        if ai_verified_successfully:
+            user["balance"] += 500
+            user["story_claimed"] = True
+            db_save_user(user)
+            await processing_msg.edit_text(
+                "✅ <b>Fair dinkum!</b> The AI spotted the link and verified your Story. <b>500 Chips</b> added to your stash! Go smash the Pokies! 🎰",
+                parse_mode="HTML"
+            )
+        else:
+            await processing_msg.edit_text(
+                "❌ <b>Strewth!</b> The AI couldn't spot the <b>@VipClubXQ7_bot</b> link on this image. Make sure it's clearly visible in your Story, mate!",
+                parse_mode="HTML"
+            )
+    # ====================================================================
+    # Сначала проверяются команды из main.py, затем всё остальное из handlers
     dp.include_router(main_router)
     
     asyncio.create_task(background_jobs())

@@ -1,7 +1,7 @@
 import asyncio
 import random
 from aiogram import Router, F, types, Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
 from config import GAME_NAMES, WIN_AD
 from database import db_get_user, db_save_user
@@ -12,6 +12,16 @@ from helpers import (
     render_hilo_table, get_share_markup, process_loss_stats
 )
 games_router = Router()
+CLAIMED_SHARES = set()
+
+
+from helpers import (
+    handle_no_money, is_happy_hour, get_tier, handle_whiskey_buff,
+    handle_game_end_xp, get_50_50_mult, handle_loot_drops, render_bj_table,
+    render_hilo_table, get_share_markup, process_loss_stats
+)
+
+
 
 @games_router.message(F.text.in_(GAME_NAMES))
 async def pre_game_bet(message: types.Message, bot: Bot):
@@ -515,3 +525,37 @@ async def process_rps(callback: types.CallbackQuery, bot: Bot):
         text += f"💀 <b>DEALER WINS!</b>\n📉 <i>Lost: {bet}</i>\n🏦 <b>Stash:</b> {user['balance']}{whiskey_text}"
         await callback.message.edit_text(text, parse_mode="HTML")
     db_save_user(user)
+
+# ==========================================
+# OBSŁUGA PRZYCISKU "CLAIM 100 BONUS CHIPS"
+# ==========================================
+@games_router.callback_query(F.data.startswith("claim_share_"))
+async def process_share_bonus(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    parts = callback.data.split("_")
+    
+    # Format to: claim_share_{game_id}_{win_amount}
+    game_id = parts[2]
+    win_amount = parts[3]
+    unique_claim_key = f"{user_id}_{game_id}"
+    
+    # Sprawdzamy, czy gracz już odebrał bonus
+    if unique_claim_key in CLAIMED_SHARES:
+        await callback.answer("❌ You already claimed your chips for this win, mate!", show_alert=True)
+        return
+        
+    user = db_get_user(user_id)
+    user["balance"] += 100
+    CLAIMED_SHARES.add(unique_claim_key)
+    db_save_user(user)
+    
+    await callback.answer("🎉 Good on ya! 100 Bonus Chips credited to your stash!", show_alert=True)
+
+@games_router.callback_query(F.data == "ask_for_story_screen")
+async def ask_story(callback: CallbackQuery):
+    await callback.message.answer(
+        "📸 <b>Bonza!</b>\n\nTo claim your massive 500 Chips Story bonus:\n1. Post a Story on Telegram with our link.\n2. Take a screenshot of your Story.\n3. Send the photo to me right here!",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
